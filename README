@@ -323,7 +323,8 @@ SEE ALSO
     If you're into AnyEvent, AnyEvent::DBI and AnyEvent::Worker (based on
     AnyEvent::DBI), and AnyEvent::ForkObject send and receive commands from
     worker processes similar to this module. AnyEvent::Worker::Pool also has
-    an implementation of a worker pool.
+    an implementation of a worker pool. AnyEvent::Gearman can interface with
+    Gearman services.
 
     If you're into POE there is POE::Component::Pool::DBI, POEx::WorkerPool,
     POE::Component::ResourcePool, POE::Component::PreforkDispatch,

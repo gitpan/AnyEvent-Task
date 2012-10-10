@@ -34,10 +34,12 @@
          "requires" : {
             "AnyEvent" : 0,
             "Callback::Frame" : 0,
+            "Guard" : 0,
+            "JSON::XS" : 0,
             "common::sense" : 0
          }
       }
    },
    "release_status" : "stable",
-   "version" : "v0.5.1"
+   "version" : "0.600"
 }
