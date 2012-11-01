@@ -23,4 +23,4 @@ requires:
   Guard: 0
   JSON::XS: 0
   common::sense: 0
-version: 0.600
+version: 0.601
