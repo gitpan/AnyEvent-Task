@@ -44,7 +44,6 @@ SYNOPSIS 1: PASSWORD HASHING
         $checkout->hash('secret',
           sub {
             my ($checkout, $crypted) = @_;
-            die "hashing process died: $@" if defined $@;
 
             print "Hashed password is $crypted\n";
 
@@ -91,7 +90,6 @@ SYNOPSIS 2: DBI
                                 undef, $username,
           sub {
             my ($dbh, $row) = @_;
-            die "DB lookup failed: $@" if defined $dbh;
             print "User's email is $row->{email}\n";
             ## Use same $dbh here if using transactions
           });
@@ -312,6 +310,10 @@ COMPARISON WITH HTTP
 
 SEE ALSO
     <The AnyEvent::Task github repo>
+
+    This module is integrated with Callback::Frame. In order to handle
+    exceptions in a meaningful way, you will need to use this module. FIXME:
+    Add examples and synopsis entry demonstrating this.
 
     There's about a million CPAN modules that do similar things.
 
