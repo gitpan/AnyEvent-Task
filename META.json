@@ -6,7 +6,7 @@
    "dynamic_config" : 1,
    "generated_by" : "ExtUtils::MakeMaker version 6.62, CPAN::Meta::Converter version 2.112620",
    "license" : [
-      "unknown"
+      "perl_5"
    ],
    "meta-spec" : {
       "url" : "http://search.cpan.org/perldoc?CPAN::Meta::Spec",
@@ -41,5 +41,13 @@
       }
    },
    "release_status" : "stable",
-   "version" : "0.602"
+   "resources" : {
+      "bugtracker" : {
+         "web" : "https://github.com/hoytech/AnyEvent-Task/issues"
+      },
+      "repository" : {
+         "url" : "git://github.com/hoytech/AnyEvent-Task.git"
+      }
+   },
+   "version" : "0.700"
 }
