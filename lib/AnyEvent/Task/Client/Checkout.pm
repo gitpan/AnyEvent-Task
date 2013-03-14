@@ -9,7 +9,7 @@ use Callback::Frame;
 
 
 use overload fallback => 1,
-             '&{}' => \&invoked_as_sub;
+             '&{}' => \&_invoked_as_sub;
 
 our $AUTOLOAD;
 
@@ -26,6 +26,8 @@ sub _new {
                      exists $arg{client}->{timeout} ? $arg{client}->{timeout} :
                      30;
 
+  $self->{log_defer_object} = $arg{log_defer_object} if exists $arg{log_defer_object};
+
   $self->{pending_requests} = [];
 
   return $self;
@@ -41,24 +43,21 @@ sub AUTOLOAD {
 
   $self->{last_name} = $name;
 
-  return $self->queue_request([ $name, @_, ]);
+  return $self->_queue_request([ $name, @_, ]);
 }
 
-sub invoked_as_sub {
+sub _invoked_as_sub {
   my $self = shift;
 
   return sub {
     $self->{last_name} = undef;
 
-    return $self->queue_request([ @_, ]);
+    return $self->_queue_request([ @_, ]);
   };
 }
 
-sub queue_request {
+sub _queue_request {
   my ($self, $request) = @_;
-
-  die "can't perform request on checkout because an error occurred: $self->{error_occurred}"
-    if exists $self->{error_occurred};
 
   unless (Callback::Frame::is_frame($request->[-1])) {
     my $name = undef;
@@ -79,14 +78,14 @@ sub queue_request {
 
   push @{$self->{pending_requests}}, $request;
 
-  $self->install_timeout_timer;
+  $self->_install_timeout_timer;
 
   $self->try_to_fill_requests;
 
   return;
 }
 
-sub install_timeout_timer {
+sub _install_timeout_timer {
   my ($self) = @_;
 
   return if !defined $self->{timeout};
@@ -100,15 +99,14 @@ sub install_timeout_timer {
       delete $self->{worker};
     }
 
-    $self->throw_error("timed out after $self->{timeout} seconds");
+    $self->throw_fatal_error("timed out after $self->{timeout} seconds");
   };
 }
 
-sub throw_error {
+sub _throw_error {
   my ($self, $err) = @_;
 
-  return if $self->{error_occurred};
-  $self->{error_occurred} = $err;
+  $self->{error_occurred} = 1;
 
   my $current_cb;
 
@@ -116,6 +114,8 @@ sub throw_error {
     $current_cb = $self->{current_cb};
   } elsif (@{$self->{pending_requests}}) {
     $current_cb = $self->{pending_requests}->[0]->[-1];
+  } else {
+    die "_throw_error called but no callback installed. Error thrown was: $err";
   }
 
   if ($current_cb) {
@@ -126,13 +126,12 @@ sub throw_error {
   }
 }
 
-sub throw_error_non_fatal {
+sub throw_fatal_error {
   my ($self, $err) = @_;
 
-  return if $self->{error_occurred};
+  $self->{fatal_error} = $err;
 
-  $self->{error_is_non_fatal} = 1;
-  $self->throw_error($err);
+  $self->_throw_error($err);
 }
 
 sub try_to_fill_requests {
@@ -145,8 +144,14 @@ sub try_to_fill_requests {
 
   my $cb = pop @{$request};
   $self->{current_cb} = $cb;
+  Scalar::Util::weaken($self->{current_cb});
 
-  $self->install_timeout_timer;
+  if ($self->{fatal_error}) {
+    $self->_throw_error($self->{fatal_error});
+    return;
+  }
+
+  $self->_install_timeout_timer;
 
   $self->{worker}->push_write( json => [ 'do', {}, @$request, ], );
 
@@ -155,22 +160,19 @@ sub try_to_fill_requests {
 
     my ($response_code, $meta, $response_value) = @$response;
 
-    $self->{worker_wants_to_shutdown} = 1 if $meta->{sk};
+    if ($self->{log_defer_object} && $meta->{ld}) {
+      $self->{log_defer_object}->merge($meta->{ld});
+    }
 
     if ($response_code eq 'ok') {
       local $@ = undef;
       $cb->($self, $response_value);
     } elsif ($response_code eq 'er') {
-      $self->throw_error_non_fatal($response_value);
-    } elsif ($response_code eq 'sk') {
-      $self->{worker_wants_to_shutdown} = 1;
-      $self->{worker}->push_read( json => $self->{cmd_handler} );
-      return;
+      $self->_throw_error($response_value);
     } else {
       die "Unrecognized response_code: $response_code";
     }
 
-    delete $self->{current_cb};
     delete $self->{timeout_timer};
     delete $self->{cmd_handler};
 
@@ -191,7 +193,7 @@ sub DESTROY {
     delete $self->{client}->{workers_to_checkouts}->{0 + $worker} if $self->{client};
     delete $self->{worker};
 
-    if ($self->{error_occurred} && !$self->{error_is_non_fatal}) {
+    if ($self->{fatal_error} || ($self->{error_occurred} && $self->{client} && $self->{client}->{refork_after_error})) {
       $self->{client}->destroy_worker($worker) if $self->{client};
       $self->{client}->populate_workers if $self->{client};
     } else {

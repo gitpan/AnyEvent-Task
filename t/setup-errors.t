@@ -13,7 +13,8 @@ use Test::More tests => 2;
 
 
 ## The point of this test is to verify that exceptions thrown in
-## setup callbacks are propagated to the client.
+## setup callbacks are propagated to the client. It also validates
+## that by default workers aren't restarted on setup errors.
 
 
 my $attempt = 0;
@@ -45,7 +46,7 @@ my $cv = AE::cv;
   }, catch => sub {
     my $err = $@;
 
-    ok($err =~ /setup exception: SETUP EXCEPTION 1/);
+    like($err, qr/setup exception: SETUP EXCEPTION 1/);
 
     $cv->send;
   }));
@@ -64,7 +65,7 @@ $cv = AE::cv;
   }, catch => sub {
     my $err = $@;
 
-    ok($err =~ /setup exception: SETUP EXCEPTION 2/);
+    like($err, qr/setup exception: SETUP EXCEPTION 2/);
 
     $cv->send;
   }));

@@ -14,7 +14,6 @@ use Scalar::Util qw/blessed/;
 my $setup_has_been_run;
 my $json;
 my $sel;
-my $attempt_graceful_stop;
 
 
 
@@ -43,9 +42,8 @@ sub handle_worker_wrapped {
 
     foreach my $ready (@all_ready) {
       if ($ready == $monitor_fh) {
-        $attempt_graceful_stop = 1;
+        ## Lost connection to server
         $sel->remove($monitor_fh);
-        my_syswrite($fh, encode_json(['sk']));
       } elsif ($ready == $fh) {
         process_data($server, $fh);
       }
@@ -81,9 +79,7 @@ sub process_data {
     if ($cmd eq 'do') {
       my $val;
 
-      if ($attempt_graceful_stop) {
-        $output_meta->{sk} = 1;
-      }
+      local $AnyEvent::Task::Logger::log_defer_object;
 
       eval {
         if (!$setup_has_been_run) {
@@ -95,6 +91,9 @@ sub process_data {
       };
 
       my $err = $@;
+
+      $output_meta->{ld} = $AnyEvent::Task::Logger::log_defer_object->{msg}
+        if defined $AnyEvent::Task::Logger::log_defer_object;
 
       if ($err) {
         $err = "$err" if blessed $err;
