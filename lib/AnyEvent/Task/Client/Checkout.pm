@@ -52,7 +52,7 @@ sub _invoked_as_sub {
   return sub {
     $self->{last_name} = undef;
 
-    return $self->_queue_request([ @_, ]);
+    return $self->_queue_request([ undef, @_, ]);
   };
 }
 
@@ -151,12 +151,27 @@ sub try_to_fill_requests {
     return;
   }
 
+  my $method_name = $request->[0];
+
+  if (!defined $method_name) {
+    $method_name = '->()';
+    shift @$request;
+  }
+
   $self->_install_timeout_timer;
 
   $self->{worker}->push_write( json => [ 'do', {}, @$request, ], );
 
+  my $timer;
+
+  if ($self->{log_defer_object}) {
+    $timer = $self->{log_defer_object}->timer($method_name);
+  }
+
   $self->{cmd_handler} = sub {
     my ($handle, $response) = @_;
+
+    undef $timer;
 
     my ($response_code, $meta, $response_value) = @$response;
 
@@ -193,7 +208,7 @@ sub DESTROY {
     delete $self->{client}->{workers_to_checkouts}->{0 + $worker} if $self->{client};
     delete $self->{worker};
 
-    if ($self->{fatal_error} || ($self->{error_occurred} && $self->{client} && $self->{client}->{refork_after_error})) {
+    if ($self->{fatal_error} || ($self->{error_occurred} && $self->{client} && !$self->{client}->{dont_refork_after_error})) {
       $self->{client}->destroy_worker($worker) if $self->{client};
       $self->{client}->populate_workers if $self->{client};
     } else {

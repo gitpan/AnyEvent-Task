@@ -2,13 +2,15 @@ package AnyEvent::Task;
 
 use common::sense;
 
-our $VERSION = '0.720';
+our $VERSION = '0.750';
 
 
 1;
 
 
 __END__
+
+=encoding utf-8
 
 =head1 NAME
 
@@ -56,7 +58,9 @@ AnyEvent::Task - Client/server-based asynchronous worker pool
                    connect => ['unix/', '/tmp/anyevent-task.socket'],
                  );
 
-    my $checkout; $checkout = $client->checkout( timeout => 5, );
+    my $checkout = $client->checkout( timeout => 5, );
+
+    my $cv = AE::cv;
 
     $checkout->hash('secret',
       sub {
@@ -64,12 +68,20 @@ AnyEvent::Task - Client/server-based asynchronous worker pool
 
         print "Hashed password is $crypted\n";
 
-        $checkout->verify($crypted,
+        $checkout->verify($crypted, 'secret',
           sub {
             my ($checkout, $result) = @_;
-            print "Verify result is $result\n":
+            print "Verify result is $result\n";
+            $cv->send;
           });
       });
+
+    $cv->recv;
+
+=head2 Output
+
+    Hashed password is $2a$10$NwTOwxmTlG0Lk8YZMT29/uysC9RiZX4jtWCx.deBbb2evRjCq6ovi
+    Verify result is 1
 
 
 
@@ -84,40 +96,52 @@ AnyEvent::Task - Client/server-based asynchronous worker pool
 
     my $dbh;
 
-    my $server = AnyEvent::Task::Server->new(
-                   listen => ['unix/', '/tmp/anyevent-task.socket'],
-                   setup => sub {
-                     $dbh = DBI->connect(...);
-                   },
-                   interface => sub {
-                     my ($method, @args) = @_;
-                     $args[0] = $dbh->prepare_cached($args[0]) if defined $args[0];
-                     $dbh->$method(@args);
-                   },
-                 );
-
-    $server->run; # or AE::cv->recv
-
+    AnyEvent::Task::Server->new(
+      listen => ['unix/', '/tmp/anyevent-task.socket'],
+      setup => sub {
+        $dbh = DBI->connect("dbi:SQLite:dbname=/tmp/junk.sqlite3","","",{ RaiseError => 1, });
+      },
+      interface => sub {
+        my ($method, @args) = @_;
+        $dbh->$method(@args);
+      },
+    )->run;
 
 =head2 Client
 
     use AnyEvent::Task::Client;
 
-    my $dbh_pool = AnyEvent::Task::Client->new(
-                     connect => ['unix/', '/tmp/anyevent-task.socket'],
-                   );
+    my $client = AnyEvent::Task::Client->new(
+                   connect => ['unix/', '/tmp/anyevent-task.socket'],
+                 );
 
-    my $username = 'jimmy';
+    my $dbh = $client->checkout;
 
-    my $dbh = $dbh_pool->checkout;
+    my $cv = AE::cv;
 
-    $dbh->selectrow_hashref(q{ SELECT email FROM user WHERE username = ? },
-                            undef, $username,
-      sub {
-        my ($dbh, $row) = @_;
-        print "User's email is $row->{email}\n";
-        ## Use same $dbh here if using transactions
-      });
+    $dbh->do(q{ CREATE TABLE user(username TEXT PRIMARY KEY, email TEXT); },
+      sub { });
+
+    ## Requests will queue up on the checkout and execute in order:
+
+    $dbh->do(q{ INSERT INTO user (username, email) VALUES (?, ?) },
+             undef, 'jimmy',
+                    'jimmy@example.com',
+      sub { });
+
+    $dbh->selectrow_hashref(q{ SELECT * FROM user }, sub {
+      my ($dbh, $user) = @_;
+      print "username: $user->{username}, email: $user->{email}\n";
+      $cv->send;
+    });
+
+    $cv->recv;
+
+=head2 Output
+
+    username: jimmy, email: jimmy@example.com
+
+
 
 =head1 DESCRIPTION
 
@@ -150,7 +174,7 @@ C<timeout> can be passed as a keyword argument to C<checkout>. Once a request is
 
 Note that since timeouts are associated with a checkout, the client process can be started before the server and as long as the server is started within C<timeout> seconds, no requests will be lost. The client will continually try to acquire worker processes until a server is available, and once one is available it will attempt to fill all queued checkouts.
 
-Because of checkout queuing, the maximum number of worker processes a client will attempt to obtain can be limited with the C<max_workers> argument when creating a client object. If there are more live checkouts than C<max_workers>, the remaining checkouts will have to wait until one of the other workers becomes available. Because of timeouts, some checkouts may never be serviced if the system can't handle the load (those requests should be sent "service temporarily unavailable" errors).
+Because of checkout queuing, the maximum number of worker processes a client will attempt to obtain can be limited with the C<max_workers> argument when creating a client object. If there are more live checkouts than C<max_workers>, the remaining checkouts will have to wait until one of the other workers becomes available. Because of timeouts, some checkouts may never be serviced if the system can't handle the load (the timeout error should be handled to indicate the service is temporarily unavailable).
 
 The C<min_workers> argument can be used to pre-fork "hot-standby" worker processes when creating the client. The default is 2 though note that this may change to 0 in the future.
 
@@ -160,9 +184,11 @@ The C<min_workers> argument can be used to pre-fork "hot-standby" worker process
 
 =head1 STARTING THE SERVER
 
-Technically, running the server and the client in the same process is possible, but is highly discouraged since the server will C<fork()> when the client desires a worker process. In this case, all descriptors in use by the client would be duped into the worker process and the worker would have to close all the extra- descriptors created by the client. Also, forking a busy client may be memory-inefficient.
+Often you will want to start the client and server as completely separate processes as indicated in the synopsis.
 
-Since it's more of a bother than it's worth to run the server and the client in the same process, there is an alternate server constructor, C<AnyEvent::Task::Server::fork_task_server>. It can be passed the same arguments as the regular C<new> constructor:
+Technically, running the server and the client in the same process is possible but is highly discouraged since the server will C<fork()> when the client desires a worker process. In this case, all descriptors in use by the client would be duped into the worker process and the worker may have to close these extra descriptors. Also, forking a busy client may be memory-inefficient.
+
+Since it's more of a bother than it's worth to run the server and the client in the same process, there is an alternate server constructor, C<AnyEvent::Task::Server::fork_task_server> for when you'd like to run both. It can be passed the same arguments as the regular C<new> constructor:
 
     ## my ($keepalive_pipe, $pid) =
     AnyEvent::Task::Server::fork_task_server(
@@ -172,9 +198,9 @@ Since it's more of a bother than it's worth to run the server and the client in 
                        },
     );
 
-The only differences between this and the regular constructor is that this will fork a process which becomes the server, and that it will install a "keep-alive" pipe between the server and the client. This keep-alive pipe will be used by the server to detect when the client/parent process exits.
+The only differences between this and the regular constructor is that this will fork a process which becomes the server, and that it will install a "keep-alive" pipe between the server and the client. This keep-alive pipe will be used by the server to detect when its parent the client process exits.
 
-If C<AnyEvent::Task::Server::fork_task_server> is called in a void context, then the reference to this keep-alive pipe is pushed onto C<@AnyEvent::Task::Server::children_sockets>. Otherwise, the keep-alive pipe and the server's PID are returned. Closing the pipe will terminate the worker gracefully. Kill the PID to terminate it immediately.
+If C<AnyEvent::Task::Server::fork_task_server> is called in a void context, then the reference to this keep-alive pipe is pushed onto C<@AnyEvent::Task::Server::children_sockets>. Otherwise, the keep-alive pipe and the server's PID are returned. Closing the pipe will terminate the server gracefully. C<kill> the PID to terminate it immediately.
 
 Since the C<fork_task_server> constructor forks and requires using AnyEvent in both the parent and child processes, it is important that you not install any AnyEvent watchers before calling it. The usual caveats about forking AnyEvent applications apply (see AnyEvent docs).
 
@@ -246,7 +272,7 @@ In your server code, use L<AnyEvent::Task::Logger>. It exports the function C<lo
 Note: Portable server code should not call C<sleep> because on some systems it will interfere with the recoverable worker timeout feature implemented with C<SIGALRM>.
 
 
-In your client code, pass a Log::Defer object in when you create a checkout:
+In your client code, pass a L<Log::Defer> object in when you create a checkout:
 
     use AnyEvent::Task::Client;
     use Log::Defer;
@@ -325,9 +351,15 @@ If you expected some operation to throw an exception, in a synchronous program y
       say "hashed password is $crypted";
     }
 
-But in an asynchronous program, typically the C<hash> operation would initiate some kind of asynchronous operation and then return immediately. The error might come back at any time in the future, in which case you need a way to map the exception that is thrown back to the C<$conn> object.
+But in an asynchronous program, typically C<hash> would initiate some kind of asynchronous operation and then return immediately. The error might come back at any time in the future, in which case you need a way to map the exception that is thrown back to your original context.
 
-AnyEvent::Task accomplishes this mapping with L<Callback::Frame>. For example:
+AnyEvent::Task accomplishes this mapping with L<Callback::Frame>.
+
+Callback::Frame lets you preserve error handlers (and C<local> variables) across asynchronous callbacks. Callback::Frame is not tied to AnyEvent::Task, AnyEvent or any other async framework and can be used with almost all most callback-based libraries.
+
+However, when using AnyEvent::Task, libraries that you use in the client must be L<AnyEvent> compatible. This restriction obviously does not apply to your server code (that being one of the main purposes of AnyEvent::Task -- accessing blocking resources from an asynchronous program).
+
+As an example usage of Callback::Frame, here is how we would handle errors thrown from a worker process running the C<hash> method in an asychronous client program:
 
     use Callback::Frame;
 
@@ -346,24 +378,32 @@ AnyEvent::Task accomplishes this mapping with L<Callback::Frame>. For example:
 
     })->(); ## <-- frame is created and then executed
 
-Why not just an error callback supplied by AnyEvent::Task?
+Of course if C<hash> is something like a bcrypt hash function it is very unlikely to raise an exception so maybe it's a bad example. Or maybe it's a really good example: In addition to errors that occur while running your callbacks, L<AnyEvent::Task> uses L<Callback::Frame> to throw errors if the worker process times out, so if the bcrypt work factor is really cranked up it might hit the default 30 second time limit.
 
-Callback::Frame lets you pass dynamic state (like error handlers and dynamic variables) through nested chains of callbacks even if some of those callbacks don't support your error handling system.
 
-Additionally, Callback::Frame provides an error handler stack so you can have nested error handlers (similar to nested C<eval>s). This is useful when you wish to have a top-level "bail-out" error handler and also nested error handlers that know how to retry or recover from an error in an async sub-operation.
 
-Callback::Frame is not tied to AnyEvent::Task, AnyEvent or any other async framework and can be used with almost all most callback-based libraries. But when using AnyEvent::Task, your libraries that you use in the client must be L<AnyEvent> compatible.
+=head2 Reforking of workers after errors
 
-Instead of passing C<sub { ... }> into libraries, pass in C<fub { ... }>. When invoked, the wrapped callback will first re-establish any error handlers installed with C<frame>, and then run your actual callback code. Note that it's important that all callbacks be created with C<fub> (or C<frame>) even if you don't expect them to fail so that the dynamic context is preserved for nested callbacks that might.
+If a worker throws an error, the client receives the error but the worker process stays running. As long as the client has a reference to the checkout, it can still be used to communicate with that worker so you can access error states, rollback transactions, or clean-up something.
 
-If you have a callback and wish to raise an exception inside its dynamic context, use C<existing_frame>:
+Once the checkout is released however, by default the worker will be shutdown instead of returning to the client's worker pool as in the normal case where no errors were thrown. This can be prevented by setting the C<dont_refork_after_error> option in the client options. This only really matters if your C<setup> routines take a long time and errors are being thrown frequently.
 
-    frame(existing_frame => $current_cb,
-          code => sub {
-      die $err;
-    })->();
+There are exceptions to returning workers that threw errors back into the worker pool: workers that have thrown fatal errors such as loss of connection or hung worker timeout errors. These errors are stored in the checkout and for as long as the checkout exists, any operations on it will return the stored fatal error. The worker connection is closed and a new worker process is forked.
 
-In addition to errors that occur while running your callbacks, L<AnyEvent::Task> uses this feature of L<Callback::Frame> to throw errors if the worker process dies or times out.
+
+
+=head2 Rationale for Callback::Frame
+
+Why not just call the callback but set C<$@> to indicate an error has occurred? This is the approach taken with L<AnyEvent::DBI> and L<AnyEvent::Worker> for example but I believe the L<Callback::Frame> interface is superior to this. The problem is that exceptions are supposed to be an out-of-band message and code that doesn't handle them will have the exceptions bubbled up, usually to a top-level error handler. Invoking the callback when an error occurs forces exceptions to be handled in-band.
+
+Why not just have AnyEvent::Task expose an error callback? I believe Callback::Frame is superior to this also: With error callbacks you still have to write error handler callbacks everywhere an error might be thrown instead of having a single "catch-all" top-level error handler.
+
+Callback::Frame provides an error handler stack so you can have nested error handlers (similar to nested C<eval>s). This is useful when you wish to have a top-level "bail-out" error handler and also nested error handlers that know how to retry or recover from an error in an async sub-operation.
+
+Callback::Frame helps you maintain the dynamic state (error handlers and dynamic variables) installed for a single connection. In other words, any errors that occur while servicing that connection will be able to be caught by an error handler specific to that connection. This lets you send an error response and also collect all associated log messages in a Log::Defer object specific to that connection.
+
+Callback::Frame is designed to be easily used with libraries that don't know about Callback::Frame. C<fub> is a shortcut for C<frame> with just the C<code> argument. Instead of passing C<sub { ... }> into libraries you can pass in C<fub { ... }>. When invoked, this wrapped callback will first re-establish any error handlers that you installed with C<frame> and then run your actual callback code. Error callbacks should be populated with C<fub { die "..." }> . It's important that all callbacks be created with C<fub> (or C<frame>) even if you don't expect them to fail so that the dynamic context is preserved for nested callbacks that might.
+
 
 
 
@@ -453,9 +493,6 @@ Transaction done:
     ['dn', {META}]
 
 
-Client wants to shutdown:
-    just shuts down connection
-
 
 
 
@@ -463,24 +500,30 @@ Client wants to shutdown:
 
 TODO
 
-! make client examples in synopsis actually runnable lol
-
-! need tests for the following features:
-  - checkout_done signal sent to worker to issue rollback or whatever
-  - recovering stuff off a worker after C<SIGALRM> timeout
+! optionally limit number of times a worker can be checked out
+  before reforking a new one to deal with leaky code
 
 ! max checkout queue size
-  - start delivering fatal errors to some. at front of queue
-    or back of queue though?
+  - start delivering fatal errors to some (at front of queue
+    or back of queue though?)
   - test for this
+
+! docs: write good error handling example
+
+! a worker that throws an error should clear out the request queue
+  in the checkout (ie in DBI example)
+
+Make names more consistent between callback::frame backtraces and
+auto-generated log::defer timers
 
 Servers must wait() on all their children before terminating.
   Support relinquishing accept() socket during this period?
 
 Manual termination of checkouts
-  - Write test to ensure callback isn't run after timing out
-    or manually terminating checkouts
+  - Write test to ensure queued callbacks aren't run
 
 Document hung_worker_timeout and SIGALRM stuff better
 
-min_workers == 0 doesn't work.. always starts up 1 worker
+need tests for the following features:
+  - checkout_done signal sent to worker to issue rollback or whatever
+  - recovering stuff off a worker after C<SIGALRM> timeout

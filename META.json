@@ -36,7 +36,7 @@
             "Callback::Frame" : 0,
             "Guard" : 0,
             "JSON::XS" : 0,
-            "Log::Defer" : "0.201",
+            "Log::Defer" : "0.300",
             "common::sense" : 0
          }
       }
@@ -50,5 +50,5 @@
          "url" : "git://github.com/hoytech/AnyEvent-Task.git"
       }
    },
-   "version" : "0.720"
+   "version" : "0.750"
 }
