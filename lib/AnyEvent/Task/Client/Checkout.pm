@@ -3,7 +3,6 @@ package AnyEvent::Task::Client::Checkout;
 use common::sense;
 
 use Scalar::Util;
-use Guard;
 
 use Callback::Frame;
 
@@ -80,7 +79,7 @@ sub _queue_request {
 
   $self->_install_timeout_timer;
 
-  $self->try_to_fill_requests;
+  $self->_try_to_fill_requests;
 
   return;
 }
@@ -118,6 +117,8 @@ sub _throw_error {
     die "_throw_error called but no callback installed. Error thrown was: $err";
   }
 
+  $self->{pending_requests} = undef;
+
   if ($current_cb) {
     frame(existing_frame => $current_cb,
           code => sub {
@@ -134,7 +135,7 @@ sub throw_fatal_error {
   $self->_throw_error($err);
 }
 
-sub try_to_fill_requests {
+sub _try_to_fill_requests {
   my ($self) = @_;
 
   return unless exists $self->{worker};
@@ -191,7 +192,7 @@ sub try_to_fill_requests {
     delete $self->{timeout_timer};
     delete $self->{cmd_handler};
 
-    $self->try_to_fill_requests;
+    $self->_try_to_fill_requests;
   };
 
   $self->{worker}->push_read( json => $self->{cmd_handler} );
