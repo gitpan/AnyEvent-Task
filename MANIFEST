@@ -25,4 +25,5 @@ t/timeout-connect.t
 t/timeout-hung-worker.t
 t/timeout-in-progress.t
 t/worker-_exits.t
-META.yml                                 Module meta-data (added by MakeMaker)
+META.yml                                 Module YAML meta-data (added by MakeMaker)
+META.json                                Module JSON meta-data (added by MakeMaker)
